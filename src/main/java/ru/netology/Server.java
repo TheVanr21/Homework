@@ -6,10 +6,10 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,10 +30,19 @@ public class Server {
 
     private final int port;
     private final ExecutorService threadPool;
+    private final Handler defaultHandler;
 
-    public Server(int port, int poolSize) {
+    private final Map<String, Map<String, Handler>> handlers = new ConcurrentHashMap<>();
+
+
+    public Server(int port, int poolSize, Handler defaultHandler) {
         this.port = port;
         this.threadPool = Executors.newFixedThreadPool(poolSize);
+        this.defaultHandler = defaultHandler;
+    }
+
+    public void setDefaultHandler(Handler handler) {
+
     }
 
     public void start() {
@@ -54,18 +63,35 @@ public class Server {
                 final var in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 final var out = new BufferedOutputStream(clientSocket.getOutputStream())
         ) {
-            // read only request line for simplicity
-            // must be in form GET /path HTTP/1.1
             final var requestLine = in.readLine();
             final var parts = requestLine.split(" ");
 
             if (parts.length != 3) {
-                // just close socket
                 return;
             }
 
+            final var method = parts[0];
             final var path = parts[1];
-            if (!validPaths.contains(path)) {
+
+            final List<String> headers = new ArrayList<>();
+            String headerLine;
+            while ((headerLine = in.readLine()).isBlank()) {
+                headers.add(headerLine);
+            }
+
+            var request = new Request(method, path, headers, "");
+
+            Handler handler = null;
+            Map<String, Handler> methodHandlers = handlers.get(method);
+            if (methodHandlers != null) {
+                handler = methodHandlers.get(path);
+            }
+
+            if (handler != null) {
+                handler.handle(request, out);
+            } else if (defaultHandler != null && validPaths.contains(path)) {
+                defaultHandler.handle(request, out);
+            } else {
                 out.write((
                         "HTTP/1.1 404 Not Found\r\n" +
                                 "Content-Length: 0\r\n" +
@@ -75,41 +101,12 @@ public class Server {
                 out.flush();
                 return;
             }
-
-            final var filePath = Path.of(".", "public", path);
-            final var mimeType = Files.probeContentType(filePath);
-
-            // special case for classic
-            if (path.equals("/classic.html")) {
-                final var template = Files.readString(filePath);
-                final var content = template.replace(
-                        "{time}",
-                        LocalDateTime.now().toString()
-                ).getBytes();
-                out.write((
-                        "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: " + mimeType + "\r\n" +
-                                "Content-Length: " + content.length + "\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.write(content);
-                out.flush();
-                return;
-            }
-
-            final var length = Files.size(filePath);
-            out.write((
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            Files.copy(filePath, out);
-            out.flush();
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public void addHandler(String method, String path, Handler handler) {
+        handlers.computeIfAbsent(method, m -> new ConcurrentHashMap<>()).put(path, handler);
     }
 }
