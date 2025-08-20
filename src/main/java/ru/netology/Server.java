@@ -41,10 +41,6 @@ public class Server {
         this.defaultHandler = defaultHandler;
     }
 
-    public void setDefaultHandler(Handler handler) {
-
-    }
-
     public void start() {
         try (final var serverSocket = new ServerSocket(port)) {
             System.out.println("Сервер запущен на порту " + port);
