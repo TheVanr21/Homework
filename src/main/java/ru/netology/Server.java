@@ -1,14 +1,14 @@
 package ru.netology;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,20 +25,55 @@ public class Server {
             "/forms.html",
             "/classic.html",
             "/events.html",
-            "/events.js"
+            "/events.js",
+            "/form.html",
+            "/multipart.html"
     );
+    public static final String GET = "GET";
+    public static final String POST = "POST";
+    private final List<String> validMethods = List.of(GET, POST);
+
+    private final byte[] requestLineDelimiterBytes = new byte[]{'\r', '\n'};
+    private final byte[] headersDelimiterBytes = new byte[]{'\r', '\n', '\r', '\n'};
+
+    private final String CONTENT_LENGTH_HEADER = "Content-Length";
+    private final String CONTENT_TYPE_HEADER = "Content-Type";
 
     private final int port;
     private final ExecutorService threadPool;
+    private final int requestLimit;
     private final Handler defaultHandler;
+    private final Handler default404Handler = (request, responseStream) -> {
+        responseStream.write((
+                "HTTP/1.1 404 Not Found\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        responseStream.flush();
+    };
+    private final Handler default400Handler = (request, responseStream) -> {
+        responseStream.write((
+                "HTTP/1.1 400 Bad Request\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        responseStream.flush();
+    };
 
     private final Map<String, Map<String, Handler>> handlers = new ConcurrentHashMap<>();
 
 
-    public Server(int port, int poolSize, Handler defaultHandler) {
+    public Server(int port, int threadPoolSize, int requestLimit, Handler defaultHandler) {
         this.port = port;
-        this.threadPool = Executors.newFixedThreadPool(poolSize);
+        this.threadPool = Executors.newFixedThreadPool(threadPoolSize);
+        this.requestLimit = requestLimit;
         this.defaultHandler = defaultHandler;
+    }
+
+    public int getPort() {
+        return port;
     }
 
     public void start() {
@@ -56,26 +91,67 @@ public class Server {
     private void handleClient(Socket clientSocket) {
         try (
                 clientSocket;
-                final var in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+                final var in = new BufferedInputStream(clientSocket.getInputStream());
                 final var out = new BufferedOutputStream(clientSocket.getOutputStream())
         ) {
-            final var requestLine = in.readLine();
-            final var parts = requestLine.split(" ");
+            in.mark(requestLimit);
+            final var buffer = new byte[requestLimit];
+            final var readLength = in.read(buffer);
 
-            if (parts.length != 3) {
+            final var requestLineEnd = indexOf(buffer, requestLineDelimiterBytes, 0, readLength);
+            if (requestLineEnd == -1) {
+                default400Handler.handle(null, out);
                 return;
             }
 
-            final var method = parts[0];
-            final var path = parts[1];
-
-            final List<String> headers = new ArrayList<>();
-            String headerLine;
-            while ((headerLine = in.readLine()).isBlank()) {
-                headers.add(headerLine);
+            final var requestLine = new String(Arrays.copyOf(buffer, requestLineEnd)).split(" ");
+            if (requestLine.length != 3) {
+                default400Handler.handle(null, out);
+                return;
             }
 
-            var request = new Request(method, path, headers, "");
+            final var method = requestLine[0];
+            if (!validMethods.contains(method)) {
+                default400Handler.handle(null, out);
+                return;
+            }
+            System.out.println(method);
+
+            final var path = requestLine[1];
+            if (!path.startsWith("/")) {
+                default400Handler.handle(null, out);
+                return;
+            }
+            System.out.println(path);
+
+            final var headersStart = requestLineEnd + requestLineDelimiterBytes.length;
+            final var headersEnd = indexOf(buffer, headersDelimiterBytes, headersStart, readLength);
+            if (headersEnd == -1) {
+                default400Handler.handle(null, out);
+                return;
+            }
+
+            in.reset();
+            in.skip(headersStart);
+
+            final var headersBytes = in.readNBytes(headersEnd - headersStart);
+            final var headers = Arrays.asList(new String(headersBytes).split(new String(requestLineDelimiterBytes)));
+            System.out.println(headers);
+
+            String body = null;
+            if (!method.equals(GET)) {
+                in.skip(headersDelimiterBytes.length);
+                final var contentLength = extractHeader(headers, CONTENT_LENGTH_HEADER);
+                if (contentLength.isPresent()) {
+                    final var length = Integer.parseInt(contentLength.get());
+                    final var bodyBytes = in.readNBytes(length);
+
+                    body = new String(bodyBytes);
+                    System.out.println(body);
+                }
+            }
+
+            var request = new Request(method, path, headers, body);
 
             Handler handler = null;
             Map<String, Handler> methodHandlers = handlers.get(method);
@@ -88,18 +164,32 @@ public class Server {
             } else if (defaultHandler != null && validPaths.contains(path)) {
                 defaultHandler.handle(request, out);
             } else {
-                out.write((
-                        "HTTP/1.1 404 Not Found\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
-                return;
+                default404Handler.handle(null, out);
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private static Optional<String> extractHeader(List<String> headers, String header) {
+        return headers.stream()
+                .filter(o -> o.startsWith(header))
+                .map(o -> o.substring(o.indexOf(" ")))
+                .map(String::trim)
+                .findFirst();
+    }
+
+    private static int indexOf(byte[] array, byte[] target, int start, int max) {
+        outer:
+        for (int i = start; i < max - target.length + 1; i++) {
+            for (int j = 0; j < target.length; j++) {
+                if (array[i + j] != target[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 
     public void addHandler(String method, String path, Handler handler) {

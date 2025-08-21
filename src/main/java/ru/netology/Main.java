@@ -1,26 +1,24 @@
 package ru.netology;
 
+import java.io.BufferedOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 
 public class Main {
     public static void main(String[] args) {
-        var server = new Server(9999, 64, (request, responseStream) -> {
-            final var filePath = Path.of(".", "public", request.path());
-            final var mimeType = Files.probeContentType(filePath);
+        var server = new Server(
+                9999,
+                64,
+                4096,
+                (request, responseStream) -> {
+                    final var filePath = Path.of(".", "public", request.path());
+                    final var mimeType = Files.probeContentType(filePath);
 
-            final var length = Files.size(filePath);
-            responseStream.write((
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            Files.copy(filePath, responseStream);
-            responseStream.flush();
-        });
+                    final var content = Files.readAllBytes(filePath);
+                    sendResponse(responseStream, 200, "OK", mimeType, content);
+                });
 
         server.addHandler("GET", "/classic.html", (request, responseStream) -> {
             final var filePath = Path.of(".", "public", request.path());
@@ -31,18 +29,50 @@ public class Main {
                     "{time}",
                     LocalDateTime.now().toString()
             ).getBytes();
-            responseStream.write((
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + content.length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            responseStream.write(content);
-            responseStream.flush();
+            sendResponse(responseStream, 200, "OK", mimeType, content);
+        });
+
+        server.addHandler("GET", "/form.html", (request, responseStream) -> {
+            final var filePath = Path.of(".", "public", request.path());
+            final var mimeType = Files.probeContentType(filePath);
+
+            final var template = Files.readString(filePath);
+            final var content = template
+                    .replace("{host}", "localhost")
+                    .replace("{port}", String.valueOf(server.getPort()))
+                    .getBytes();
+            sendResponse(responseStream, 200, "OK", mimeType, content);
+        });
+
+        server.addHandler("GET", "/multipart.html", (request, responseStream) -> {
+            final var filePath = Path.of(".", "public", request.path());
+            final var mimeType = Files.probeContentType(filePath);
+
+            final var template = Files.readString(filePath);
+            final var content = template
+                    .replace("{host}", "localhost")
+                    .replace("{port}", String.valueOf(server.getPort()))
+                    .getBytes();
+            sendResponse(responseStream, 200, "OK", mimeType, content);
         });
 
         server.start();
+    }
+
+    private static void sendResponse(BufferedOutputStream responseStream,
+                                     int statusCode,
+                                     String statusMessage,
+                                     String contentType,
+                                     byte[] content) throws IOException {
+        responseStream.write((
+                "HTTP/1.1 " + statusCode + " " + statusMessage + "\r\n" +
+                        "Content-Type: " + contentType + "\r\n" +
+                        "Content-Length: " + content.length + "\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        responseStream.write(content);
+        responseStream.flush();
     }
 }
 
