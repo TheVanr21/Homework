@@ -1,14 +1,14 @@
 package ru.netology;
 
+import org.apache.hc.core5.net.URIBuilder;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.net.URISyntaxException;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -117,12 +117,22 @@ public class Server {
             }
             System.out.println(method);
 
-            final var path = requestLine[1];
-            if (!path.startsWith("/")) {
+            final var rawPath = requestLine[1];
+            if (!rawPath.startsWith("/")) {
                 default400Handler.handle(null, out);
                 return;
             }
+
+            var uriBuilder = new URIBuilder(rawPath);
+            final var path = uriBuilder.getPath();
             System.out.println(path);
+
+            var params = uriBuilder.getQueryParams();
+            final Map<String, String> queryParams = new HashMap<>();
+            for (var param : params) {
+                queryParams.put(param.getName(), param.getValue());
+            }
+            System.out.println(queryParams);
 
             final var headersStart = requestLineEnd + requestLineDelimiterBytes.length;
             final var headersEnd = indexOf(buffer, headersDelimiterBytes, headersStart, readLength);
@@ -151,7 +161,7 @@ public class Server {
                 }
             }
 
-            var request = new Request(method, path, headers, body);
+            var request = new Request(method, path, queryParams, headers, body);
 
             Handler handler = null;
             Map<String, Handler> methodHandlers = handlers.get(method);
@@ -166,7 +176,7 @@ public class Server {
             } else {
                 default404Handler.handle(null, out);
             }
-        } catch (IOException e) {
+        } catch (IOException | URISyntaxException e) {
             e.printStackTrace();
         }
     }

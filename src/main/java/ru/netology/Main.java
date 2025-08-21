@@ -56,6 +56,17 @@ public class Main {
             sendResponse(responseStream, 200, "OK", mimeType, content);
         });
 
+        server.addHandler("GET", "/messages", (request, responseStream) -> {
+            final var filePath = Path.of(".", "public", "/response.html");
+            final var mimeType = Files.probeContentType(filePath);
+
+            final var template = Files.readString(filePath);
+            final var content = template
+                    .replace("{params}", request.queryParams().toString())
+                    .getBytes();
+            sendResponse(responseStream, 200, "OK", mimeType, content);
+        });
+
         server.start();
     }
 
@@ -75,5 +86,3 @@ public class Main {
         responseStream.flush();
     }
 }
-
-
