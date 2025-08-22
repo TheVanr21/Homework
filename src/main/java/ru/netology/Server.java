@@ -1,6 +1,7 @@
 package ru.netology;
 
 import org.apache.hc.core5.net.URIBuilder;
+import org.apache.hc.core5.net.WWWFormCodec;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -8,6 +9,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +40,7 @@ public class Server {
 
     private final String CONTENT_LENGTH_HEADER = "Content-Length";
     private final String CONTENT_TYPE_HEADER = "Content-Type";
+    private final String X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded";
 
     private final int port;
     private final ExecutorService threadPool;
@@ -145,23 +148,36 @@ public class Server {
             in.skip(headersStart);
 
             final var headersBytes = in.readNBytes(headersEnd - headersStart);
-            final var headers = Arrays.asList(new String(headersBytes).split(new String(requestLineDelimiterBytes)));
+            final var headers = getHeadersFromBytes(headersBytes);
             System.out.println(headers);
 
-            String body = null;
+            var body = "";
+            Map<String, List<String>> bodyParts = new LinkedHashMap<>();
             if (!method.equals(GET)) {
                 in.skip(headersDelimiterBytes.length);
-                final var contentLength = extractHeader(headers, CONTENT_LENGTH_HEADER);
-                if (contentLength.isPresent()) {
-                    final var length = Integer.parseInt(contentLength.get());
-                    final var bodyBytes = in.readNBytes(length);
+                final var contentLength = headers.get(CONTENT_LENGTH_HEADER);
+                if (contentLength != null) {
+                    final var length = Integer.parseInt(contentLength);
+                    if (length > 0) {
+                        final var bodyBytes = in.readNBytes(length);
 
-                    body = new String(bodyBytes);
-                    System.out.println(body);
+                        body = new String(bodyBytes);
+                        System.out.println(body);
+
+                        var contentType = headers.get(CONTENT_TYPE_HEADER);
+                        if (contentType != null) {
+                            if (contentType.equalsIgnoreCase(X_WWW_FORM_URLENCODED)) {
+                                bodyParts = getBodyPartsForUrlEncoded(body);
+                            }
+                        }
+                        if (!bodyParts.isEmpty()) {
+                            System.out.println(bodyParts);
+                        }
+                    }
                 }
             }
 
-            var request = new Request(method, path, queryParams, headers, body);
+            final var request = new Request(method, path, queryParams, headers, body, bodyParts);
 
             Handler handler = null;
             Map<String, Handler> methodHandlers = handlers.get(method);
@@ -181,15 +197,36 @@ public class Server {
         }
     }
 
-    private static Optional<String> extractHeader(List<String> headers, String header) {
-        return headers.stream()
-                .filter(o -> o.startsWith(header))
-                .map(o -> o.substring(o.indexOf(" ")))
-                .map(String::trim)
-                .findFirst();
+    private Map<String, String> getHeadersFromBytes(byte[] headersBytes) {
+        var headersLines = new String(headersBytes).split(new String(requestLineDelimiterBytes));
+        Map<String, String> headers = new LinkedHashMap<>();
+
+        for (var headerLine : headersLines) {
+            int colonIndex = headerLine.indexOf(":");
+            if (colonIndex > 0) {
+                var name = headerLine.substring(0, colonIndex).trim();
+                var value = headerLine.substring(colonIndex + 1).trim();
+
+                headers.put(name, value);
+            }
+        }
+        return headers;
     }
 
-    private static int indexOf(byte[] array, byte[] target, int start, int max) {
+    private Map<String, List<String>> getBodyPartsForUrlEncoded(String body) {
+        Map<String, List<String>> bodyParts = new LinkedHashMap<>();
+        var pairs = WWWFormCodec.parse(body, StandardCharsets.UTF_8);
+
+        for (var pair : pairs) {
+            String key = pair.getName();
+            String value = pair.getValue();
+
+            bodyParts.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+        }
+        return bodyParts;
+    }
+
+    private int indexOf(byte[] array, byte[] target, int start, int max) {
         outer:
         for (int i = start; i < max - target.length + 1; i++) {
             for (int j = 0; j < target.length; j++) {

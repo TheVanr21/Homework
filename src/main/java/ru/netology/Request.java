@@ -7,6 +7,7 @@ public record Request(
         String method,
         String path,
         Map<String, String> queryParams,
-        List<String> headers,
-        String body) {
+        Map<String, String> headers,
+        String body,
+        Map<String, List<String>> bodyParts) {
 }

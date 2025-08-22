@@ -67,6 +67,21 @@ public class Main {
             sendResponse(responseStream, 200, "OK", mimeType, content);
         });
 
+        server.addHandler("POST", "/get-value", (request, responseStream) -> {
+            final var filePath = Path.of(".", "public", "/response.html");
+            final var mimeType = Files.probeContentType(filePath);
+
+            final var template = Files.readString(filePath);
+            var replacement = new StringBuilder();
+            for (var part : request.bodyParts().entrySet()) {
+                replacement.append(part.getKey()).append(" -> ").append(part.getValue()).append("<br>");
+            }
+            final var content = template
+                    .replace("{params}", replacement)
+                    .getBytes();
+            sendResponse(responseStream, 200, "OK", mimeType, content);
+        });
+
         server.start();
     }
 
