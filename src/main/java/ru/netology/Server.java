@@ -41,6 +41,10 @@ public class Server {
     private final String CONTENT_LENGTH_HEADER = "Content-Length";
     private final String CONTENT_TYPE_HEADER = "Content-Type";
     private final String X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded";
+    private final String CONTENT_DISPOSITION_HEADER = "Content-Disposition";
+    private final String MULTIPART_FORM_DATA = "multipart/form-data";
+
+    private final String BOUNDARY = "boundary";
 
     private final int port;
     private final ExecutorService threadPool;
@@ -169,6 +173,13 @@ public class Server {
                             if (contentType.equalsIgnoreCase(X_WWW_FORM_URLENCODED)) {
                                 bodyParts = getBodyPartsForUrlEncoded(body);
                             }
+                            if (contentType.toLowerCase().startsWith(MULTIPART_FORM_DATA)) {
+                                var boundaryIndex = contentType.indexOf(BOUNDARY + "=");
+                                if (boundaryIndex != -1) {
+                                    var boundary = "--" + contentType.substring(boundaryIndex + BOUNDARY.length() + 1);
+                                    bodyParts = getBodyPartsForMultipartFormData(body, boundary);
+                                }
+                            }
                         }
                         if (!bodyParts.isEmpty()) {
                             System.out.println(bodyParts);
@@ -203,7 +214,7 @@ public class Server {
 
         for (var headerLine : headersLines) {
             int colonIndex = headerLine.indexOf(":");
-            if (colonIndex > 0) {
+            if (colonIndex != -1) {
                 var name = headerLine.substring(0, colonIndex).trim();
                 var value = headerLine.substring(colonIndex + 1).trim();
 
@@ -211,6 +222,62 @@ public class Server {
             }
         }
         return headers;
+    }
+
+    private Map<String, List<String>> getBodyPartsForMultipartFormData(String body, String boundary) {
+        Map<String, List<String>> bodyParts = new LinkedHashMap<>();
+
+        var splitParts = body.split(boundary);
+        for (var part : splitParts) {
+            if (part.isBlank() || part.startsWith("--")) {
+                continue;
+            }
+
+            var sections = part.split(new String(headersDelimiterBytes));
+            if (sections.length < 2) {
+                continue;
+            }
+
+            var headersBlock = sections[0].trim();
+            var content = sections[1].trim();
+
+            var headers = headersBlock.split(new String(requestLineDelimiterBytes));
+            String name = null;
+            String filename = null;
+            String contentType = null;
+            for (var header : headers) {
+                if (header.startsWith(CONTENT_DISPOSITION_HEADER)) {
+                    name = extractParameter(header, "name");
+                    if (header.contains("filename=")) {
+                        filename = extractParameter(header, "filename");
+                    }
+                }
+                if (header.startsWith(CONTENT_TYPE_HEADER)) {
+                    contentType = header;
+                }
+            }
+            if (filename != null && contentType != null && name != null) {
+                bodyParts.computeIfAbsent(name, k -> new ArrayList<>()).add("FILE: " + filename + " " + contentType + " => " + content);
+            } else if (name != null) {
+                bodyParts.computeIfAbsent(name, k -> new ArrayList<>()).add(content);
+            }
+        }
+        return bodyParts;
+    }
+
+    private String extractParameter(String header, String parameter) {
+        int headerIndex = header.indexOf(parameter + "=");
+        if (headerIndex == -1) {
+            return null;
+        }
+
+        int start = header.indexOf('"', headerIndex);
+        int end = header.indexOf('"', start + 1);
+
+        if (start != -1 && end != -1) {
+            return header.substring(start + 1, end);
+        }
+        return null;
     }
 
     private Map<String, List<String>> getBodyPartsForUrlEncoded(String body) {
