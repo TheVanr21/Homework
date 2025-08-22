@@ -1,10 +1,15 @@
 package ru.netology;
 
+import org.apache.hc.core5.net.URIBuilder;
+import org.apache.hc.core5.net.WWWFormCodec;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -35,6 +40,7 @@ public class Server {
 
     private final String CONTENT_LENGTH_HEADER = "Content-Length";
     private final String CONTENT_TYPE_HEADER = "Content-Type";
+    private final String X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded";
     private final String CONTENT_DISPOSITION_HEADER = "Content-Disposition";
     private final String MULTIPART_FORM_DATA = "multipart/form-data";
 
@@ -118,12 +124,22 @@ public class Server {
             }
             System.out.println(method);
 
-            final var path = requestLine[1];
-            if (!path.startsWith("/")) {
+            final var rawPath = requestLine[1];
+            if (!rawPath.startsWith("/")) {
                 default400Handler.handle(null, out);
                 return;
             }
+
+            var uriBuilder = new URIBuilder(rawPath);
+            final var path = uriBuilder.getPath();
             System.out.println(path);
+
+            var params = uriBuilder.getQueryParams();
+            final Map<String, String> queryParams = new HashMap<>();
+            for (var param : params) {
+                queryParams.put(param.getName(), param.getValue());
+            }
+            System.out.println(queryParams);
 
             final var headersStart = requestLineEnd + requestLineDelimiterBytes.length;
             final var headersEnd = indexOf(buffer, headersDelimiterBytes, headersStart, readLength);
@@ -154,6 +170,9 @@ public class Server {
 
                         var contentType = headers.get(CONTENT_TYPE_HEADER);
                         if (contentType != null) {
+                            if (contentType.equalsIgnoreCase(X_WWW_FORM_URLENCODED)) {
+                                bodyParts = getBodyPartsForUrlEncoded(body);
+                            }
                             if (contentType.toLowerCase().startsWith(MULTIPART_FORM_DATA)) {
                                 var boundaryIndex = contentType.indexOf(BOUNDARY + "=");
                                 if (boundaryIndex != -1) {
@@ -169,7 +188,7 @@ public class Server {
                 }
             }
 
-            final var request = new Request(method, path, headers, body, bodyParts);
+            final var request = new Request(method, path, queryParams, headers, body, bodyParts);
 
             Handler handler = null;
             Map<String, Handler> methodHandlers = handlers.get(method);
@@ -184,7 +203,7 @@ public class Server {
             } else {
                 default404Handler.handle(null, out);
             }
-        } catch (IOException e) {
+        } catch (IOException | URISyntaxException e) {
             e.printStackTrace();
         }
     }
@@ -259,6 +278,19 @@ public class Server {
             return header.substring(start + 1, end);
         }
         return null;
+    }
+
+    private Map<String, List<String>> getBodyPartsForUrlEncoded(String body) {
+        Map<String, List<String>> bodyParts = new LinkedHashMap<>();
+        var pairs = WWWFormCodec.parse(body, StandardCharsets.UTF_8);
+
+        for (var pair : pairs) {
+            String key = pair.getName();
+            String value = pair.getValue();
+
+            bodyParts.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+        }
+        return bodyParts;
     }
 
     private int indexOf(byte[] array, byte[] target, int start, int max) {
